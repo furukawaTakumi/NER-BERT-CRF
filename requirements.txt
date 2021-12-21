@@ -1,0 +1,5 @@
+matplotlib==3.5.1
+numpy==1.21.4
+pytorch_pretrained_bert==0.6.2
+torch==1.10.1
+tqdm==4.62.3

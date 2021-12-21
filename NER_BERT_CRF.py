@@ -42,19 +42,20 @@ from pytorch_pretrained_bert.optimization import BertAdam, warmup_linear
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 
 def set_work_dir(local_path="ner_bert_crf", server_path="ner_bert_crf"):
-    if (os.path.exists(os.getenv("HOME")+'/'+local_path)):
-        os.chdir(os.getenv("HOME")+'/'+local_path)
-    elif (os.path.exists(os.getenv("HOME")+'/'+server_path)):
-        os.chdir(os.getenv("HOME")+'/'+server_path)
+    print('set work path...', local_path, os.getcwd())
+    if (os.path.exists(os.getcwd()+'/'+local_path)):
+        os.chdir(os.getcwd()+'/'+local_path)
+    elif (os.path.exists(os.getcwd()+'/'+server_path)):
+        os.chdir(os.getcwd()+'/'+server_path)
     else:
         raise Exception('Set work path error!')
 
 
 def get_data_dir(local_path="ner_bert_crf", server_path="ner_bert_crf"):
-    if (os.path.exists(os.getenv("HOME")+'/'+local_path)):
-        return os.getenv("HOME")+'/'+local_path
-    elif (os.path.exists(os.getenv("HOME")+'/'+server_path)):
-        return os.getenv("HOME")+'/'+server_path
+    if (os.path.exists(os.getcwd()+'/'+local_path)):
+        return os.getcwd()+'/'+local_path
+    elif (os.path.exists(os.getcwd()+'/'+server_path)):
+        return os.getcwd()+'/'+server_path
     else:
         raise Exception('get data path error!')
 
@@ -62,8 +63,8 @@ def get_data_dir(local_path="ner_bert_crf", server_path="ner_bert_crf"):
 print('Python version ', sys.version)
 print('PyTorch version ', torch.__version__)
 
-set_work_dir()
-print('Current dir:', os.getcwd())
+# set_work_dir()
+# print('Current dir:', os.getcwd())
 
 cuda_yes = torch.cuda.is_available()
 # cuda_yes = False
@@ -82,13 +83,13 @@ do_predict = True
 load_checkpoint = True
 # "The vocabulary file that the BERT model was trained on."
 max_seq_length = 180 #256
-batch_size = 32 #32
+batch_size = 2 #32
 # "The initial learning rate for Adam."
 learning_rate0 = 5e-5
 lr0_crf_fc = 8e-5
 weight_decay_finetune = 1e-5 #0.01
 weight_decay_crf_fc = 5e-6 #0.005
-total_train_epochs = 15
+total_train_epochs = 1
 gradient_accumulation_steps = 1
 warmup_proportion = 0.1
 output_dir = './output/'
@@ -394,19 +395,19 @@ test_dataset = NerDataset(test_examples,tokenizer,label_map,max_seq_length)
 train_dataloader = data.DataLoader(dataset=train_dataset,
                                 batch_size=batch_size,
                                 shuffle=True,
-                                num_workers=4,
+                                num_workers=1,
                                 collate_fn=NerDataset.pad)
 
 dev_dataloader = data.DataLoader(dataset=dev_dataset,
                                 batch_size=batch_size,
                                 shuffle=False,
-                                num_workers=4,
+                                num_workers=1,
                                 collate_fn=NerDataset.pad)
 
 test_dataloader = data.DataLoader(dataset=test_dataset,
                                 batch_size=batch_size,
                                 shuffle=False,
-                                num_workers=4,
+                                num_workers=1,
                                 collate_fn=NerDataset.pad)
 
 
@@ -481,252 +482,381 @@ def evaluate(model, predict_dataloader, batch_size, epoch_th, dataset_name):
 # train_start = time.time()
 global_step_th = int(len(train_examples) / batch_size / gradient_accumulation_steps * start_epoch)
 # for epoch in trange(start_epoch, total_train_epochs, desc="Epoch"):
-for epoch in range(start_epoch, total_train_epochs):
-    tr_loss = 0
-    train_start = time.time()
-    model.train()
-    optimizer.zero_grad()
-    # for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
-    for step, batch in enumerate(train_dataloader):
-        batch = tuple(t.to(device) for t in batch)
 
-        input_ids, input_mask, segment_ids, predict_mask, label_ids = batch
-        loss = model(input_ids, segment_ids, input_mask, label_ids)
+if __name__ == "__main__":
 
-        if gradient_accumulation_steps > 1:
-            loss = loss / gradient_accumulation_steps
+    for epoch in range(start_epoch, total_train_epochs):
+        tr_loss = 0
+        train_start = time.time()
+        model.train()
+        optimizer.zero_grad()
+        # for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
+        for step, batch in enumerate(train_dataloader):
+            batch = tuple(t.to(device) for t in batch)
 
-        loss.backward()
-        tr_loss += loss.item()
+            input_ids, input_mask, segment_ids, predict_mask, label_ids = batch
+            loss = model(input_ids, segment_ids, input_mask, label_ids)
 
-        if (step + 1) % gradient_accumulation_steps == 0:
-            # modify learning rate with special warm up BERT uses
-            lr_this_step = learning_rate0 * warmup_linear(global_step_th/total_train_steps, warmup_proportion)
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr_this_step
-            optimizer.step()
-            optimizer.zero_grad()
-            global_step_th += 1
+            if gradient_accumulation_steps > 1:
+                loss = loss / gradient_accumulation_steps
 
-        print("Epoch:{}-{}/{}, CrossEntropyLoss: {} ".format(epoch, step, len(train_dataloader), loss.item()))
+            loss.backward()
+            tr_loss += loss.item()
 
-    print('--------------------------------------------------------------')
-    print("Epoch:{} completed, Total training's Loss: {}, Spend: {}m".format(epoch, tr_loss, (time.time() - train_start) / 60.0))
-    valid_acc, valid_f1 = evaluate(model, dev_dataloader, batch_size, epoch, 'Valid_set')
-    # Save a checkpoint
-    if valid_f1 > valid_f1_prev:
-        # model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
-        torch.save({'epoch': epoch, 'model_state': model.state_dict(), 'valid_acc': valid_acc,
-            'valid_f1': valid_f1, 'max_seq_length': max_seq_length, 'lower_case': do_lower_case},
-                    os.path.join(output_dir, 'ner_bert_checkpoint.pt'))
-        valid_f1_prev = valid_f1
+            if (step + 1) % gradient_accumulation_steps == 0:
+                # modify learning rate with special warm up BERT uses
+                lr_this_step = learning_rate0 * warmup_linear(global_step_th/total_train_steps, warmup_proportion)
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = lr_this_step
+                optimizer.step()
+                optimizer.zero_grad()
+                global_step_th += 1
 
-evaluate(model, test_dataloader, batch_size, total_train_epochs-1, 'Test_set')
+            print("Epoch:{}-{}/{}, CrossEntropyLoss: {} ".format(epoch, step, len(train_dataloader), loss.item()))
 
-#%%
-'''
-Test_set prediction using the best epoch of NER_BERT model
-'''
-checkpoint = torch.load(output_dir+'/ner_bert_checkpoint.pt', map_location='cpu')
-epoch = checkpoint['epoch']
-valid_acc_prev = checkpoint['valid_acc']
-valid_f1_prev = checkpoint['valid_f1']
-model = BertForTokenClassification.from_pretrained(
-    bert_model_scale, state_dict=checkpoint['model_state'], num_labels=len(label_list))
-# if os.path.exists(output_dir+'/ner_bert_crf_checkpoint.pt'):
-model.to(device)
-print('Loaded the pretrain NER_BERT model, epoch:',checkpoint['epoch'],'valid acc:', 
-        checkpoint['valid_acc'], 'valid f1:', checkpoint['valid_f1'])
+        print('--------------------------------------------------------------')
+        print("Epoch:{} completed, Total training's Loss: {}, Spend: {}m".format(epoch, tr_loss, (time.time() - train_start) / 60.0))
+        valid_acc, valid_f1 = evaluate(model, dev_dataloader, batch_size, epoch, 'Valid_set')
+        # Save a checkpoint
+        if valid_f1 > valid_f1_prev:
+            # model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
+            torch.save({'epoch': epoch, 'model_state': model.state_dict(), 'valid_acc': valid_acc,
+                'valid_f1': valid_f1, 'max_seq_length': max_seq_length, 'lower_case': do_lower_case},
+                        os.path.join(output_dir, 'ner_bert_checkpoint.pt'))
+            valid_f1_prev = valid_f1
 
-model.to(device)
-# evaluate(model, train_dataloader, batch_size, total_train_epochs-1, 'Train_set')
-evaluate(model, test_dataloader, batch_size, epoch, 'Test_set')
+    evaluate(model, test_dataloader, batch_size, total_train_epochs-1, 'Test_set')
 
+    #%%
+    '''
+    Test_set prediction using the best epoch of NER_BERT model
+    '''
+    checkpoint = torch.load(output_dir+'/ner_bert_checkpoint.pt', map_location='cpu')
+    epoch = checkpoint['epoch']
+    valid_acc_prev = checkpoint['valid_acc']
+    valid_f1_prev = checkpoint['valid_f1']
+    model = BertForTokenClassification.from_pretrained(
+        bert_model_scale, state_dict=checkpoint['model_state'], num_labels=len(label_list))
+    # if os.path.exists(output_dir+'/ner_bert_crf_checkpoint.pt'):
+    model.to(device)
+    print('Loaded the pretrain NER_BERT model, epoch:',checkpoint['epoch'],'valid acc:', 
+            checkpoint['valid_acc'], 'valid f1:', checkpoint['valid_f1'])
 
-#%%
-'''
-#####  Use BertModel + CRF  #####
-CRF is for transition and the maximum likelyhood estimate(MLE).
-Bert is for latent label -> Emission of word embedding.
-'''
-print('*** Use BertModel + CRF ***')
-
-def log_sum_exp_1vec(vec):  # shape(1,m)
-    max_score = vec[0, np.argmax(vec)]
-    max_score_broadcast = max_score.view(1, -1).expand(1, vec.size()[1])
-    return max_score + torch.log(torch.sum(torch.exp(vec - max_score_broadcast)))
-
-def log_sum_exp_mat(log_M, axis=-1):  # shape(n,m)
-    return torch.max(log_M, axis)[0]+torch.log(torch.exp(log_M-torch.max(log_M, axis)[0][:, None]).sum(axis))
-
-def log_sum_exp_batch(log_Tensor, axis=-1): # shape (batch_size,n,m)
-    return torch.max(log_Tensor, axis)[0]+torch.log(torch.exp(log_Tensor-torch.max(log_Tensor, axis)[0].view(log_Tensor.shape[0],-1,1)).sum(axis))
+    model.to(device)
+    # evaluate(model, train_dataloader, batch_size, total_train_epochs-1, 'Train_set')
+    evaluate(model, test_dataloader, batch_size, epoch, 'Test_set')
 
 
-class BERT_CRF_NER(nn.Module):
+    #%%
+    '''
+    #####  Use BertModel + CRF  #####
+    CRF is for transition and the maximum likelyhood estimate(MLE).
+    Bert is for latent label -> Emission of word embedding.
+    '''
+    print('*** Use BertModel + CRF ***')
 
-    def __init__(self, bert_model, start_label_id, stop_label_id, num_labels, max_seq_length, batch_size, device):
-        super(BERT_CRF_NER, self).__init__()
-        self.hidden_size = 768
-        self.start_label_id = start_label_id
-        self.stop_label_id = stop_label_id
-        self.num_labels = num_labels
-        # self.max_seq_length = max_seq_length
-        self.batch_size = batch_size
-        self.device=device
+    def log_sum_exp_1vec(vec):  # shape(1,m)
+        max_score = vec[0, np.argmax(vec)]
+        max_score_broadcast = max_score.view(1, -1).expand(1, vec.size()[1])
+        return max_score + torch.log(torch.sum(torch.exp(vec - max_score_broadcast)))
 
-        # use pretrainded BertModel
-        self.bert = bert_model
-        self.dropout = torch.nn.Dropout(0.2)
-        # Maps the output of the bert into label space.
-        self.hidden2label = nn.Linear(self.hidden_size, self.num_labels)
+    def log_sum_exp_mat(log_M, axis=-1):  # shape(n,m)
+        return torch.max(log_M, axis)[0]+torch.log(torch.exp(log_M-torch.max(log_M, axis)[0][:, None]).sum(axis))
 
-        # Matrix of transition parameters.  Entry i,j is the score of transitioning *to* i *from* j.
-        self.transitions = nn.Parameter(
-            torch.randn(self.num_labels, self.num_labels))
-
-        # These two statements enforce the constraint that we never transfer *to* the start tag(or label),
-        # and we never transfer *from* the stop label (the model would probably learn this anyway,
-        # so this enforcement is likely unimportant)
-        self.transitions.data[start_label_id, :] = -10000
-        self.transitions.data[:, stop_label_id] = -10000
-
-        nn.init.xavier_uniform_(self.hidden2label.weight)
-        nn.init.constant_(self.hidden2label.bias, 0.0)
-        # self.apply(self.init_bert_weights)
-
-    def init_bert_weights(self, module):
-        """ Initialize the weights.
-        """
-        if isinstance(module, (nn.Linear, nn.Embedding)):
-            # Slightly different from the TF version which uses truncated_normal for initialization
-            # cf https://github.com/pytorch/pytorch/pull/5617
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
-        elif isinstance(module, BertLayerNorm):
-            module.bias.data.zero_()
-            module.weight.data.fill_(1.0)
-        if isinstance(module, nn.Linear) and module.bias is not None:
-            module.bias.data.zero_()
-
-    def _forward_alg(self, feats):
-        '''
-        this also called alpha-recursion or forward recursion, to calculate log_prob of all barX
-        '''
-
-        # T = self.max_seq_length
-        T = feats.shape[1]
-        batch_size = feats.shape[0]
-
-        # alpha_recursion,forward, alpha(zt)=p(zt,bar_x_1:t)
-        log_alpha = torch.Tensor(batch_size, 1, self.num_labels).fill_(-10000.).to(self.device)
-        # normal_alpha_0 : alpha[0]=Ot[0]*self.PIs
-        # self.start_label has all of the score. it is log,0 is p=1
-        log_alpha[:, 0, self.start_label_id] = 0
-
-        # feats: sentances -> word embedding -> lstm -> MLP -> feats
-        # feats is the probability of emission, feat.shape=(1,tag_size)
-        for t in range(1, T):
-            log_alpha = (log_sum_exp_batch(self.transitions + log_alpha, axis=-1) + feats[:, t]).unsqueeze(1)
-
-        # log_prob of all barX
-        log_prob_all_barX = log_sum_exp_batch(log_alpha)
-        return log_prob_all_barX
-
-    def _get_bert_features(self, input_ids, segment_ids, input_mask):
-        '''
-        sentances -> word embedding -> lstm -> MLP -> feats
-        '''
-        bert_seq_out, _ = self.bert(input_ids, token_type_ids=segment_ids, attention_mask=input_mask, output_all_encoded_layers=False)
-        bert_seq_out = self.dropout(bert_seq_out)
-        bert_feats = self.hidden2label(bert_seq_out)
-        return bert_feats
-
-    def _score_sentence(self, feats, label_ids):
-        '''
-        Gives the score of a provided label sequence
-        p(X=w1:t,Zt=tag1:t)=...p(Zt=tag_t|Zt-1=tag_t-1)p(xt|Zt=tag_t)...
-        '''
-
-        # T = self.max_seq_length
-        T = feats.shape[1]
-        batch_size = feats.shape[0]
-
-        batch_transitions = self.transitions.expand(batch_size,self.num_labels,self.num_labels)
-        batch_transitions = batch_transitions.flatten(1)
-
-        score = torch.zeros((feats.shape[0],1)).to(device)
-        # the 0th node is start_label->start_word,the probability of them=1. so t begin with 1.
-        for t in range(1, T):
-            score = score + \
-                batch_transitions.gather(-1, (label_ids[:, t]*self.num_labels+label_ids[:, t-1]).view(-1,1)) \
-                    + feats[:, t].gather(-1, label_ids[:, t].view(-1,1)).view(-1,1)
-        return score
-
-    def _viterbi_decode(self, feats):
-        '''
-        Max-Product Algorithm or viterbi algorithm, argmax(p(z_0:t|x_0:t))
-        '''
-
-        # T = self.max_seq_length
-        T = feats.shape[1]
-        batch_size = feats.shape[0]
-
-        # batch_transitions=self.transitions.expand(batch_size,self.num_labels,self.num_labels)
-
-        log_delta = torch.Tensor(batch_size, 1, self.num_labels).fill_(-10000.).to(self.device)
-        log_delta[:, 0, self.start_label_id] = 0
-
-        # psi is for the vaule of the last latent that make P(this_latent) maximum.
-        psi = torch.zeros((batch_size, T, self.num_labels), dtype=torch.long).to(self.device)  # psi[0]=0000 useless
-        for t in range(1, T):
-            # delta[t][k]=max_z1:t-1( p(x1,x2,...,xt,z1,z2,...,zt-1,zt=k|theta) )
-            # delta[t] is the max prob of the path from  z_t-1 to z_t[k]
-            log_delta, psi[:, t] = torch.max(self.transitions + log_delta, -1)
-            # psi[t][k]=argmax_z1:t-1( p(x1,x2,...,xt,z1,z2,...,zt-1,zt=k|theta) )
-            # psi[t][k] is the path choosed from z_t-1 to z_t[k],the value is the z_state(is k) index of z_t-1
-            log_delta = (log_delta + feats[:, t]).unsqueeze(1)
-
-        # trace back
-        path = torch.zeros((batch_size, T), dtype=torch.long).to(self.device)
-
-        # max p(z1:t,all_x|theta)
-        max_logLL_allz_allx, path[:, -1] = torch.max(log_delta.squeeze(), -1)
-
-        for t in range(T-2, -1, -1):
-            # choose the state of z_t according the state choosed of z_t+1.
-            path[:, t] = psi[:, t+1].gather(-1,path[:, t+1].view(-1,1)).squeeze()
-
-        return max_logLL_allz_allx, path
-
-    def neg_log_likelihood(self, input_ids, segment_ids, input_mask, label_ids):
-        bert_feats = self._get_bert_features(input_ids, segment_ids, input_mask)
-        forward_score = self._forward_alg(bert_feats)
-        # p(X=w1:t,Zt=tag1:t)=...p(Zt=tag_t|Zt-1=tag_t-1)p(xt|Zt=tag_t)...
-        gold_score = self._score_sentence(bert_feats, label_ids)
-        # - log[ p(X=w1:t,Zt=tag1:t)/p(X=w1:t) ] = - log[ p(Zt=tag1:t|X=w1:t) ]
-        return torch.mean(forward_score - gold_score)
-
-    # this forward is just for predict, not for train
-    # dont confuse this with _forward_alg above.
-    def forward(self, input_ids, segment_ids, input_mask):
-        # Get the emission scores from the BiLSTM
-        bert_feats = self._get_bert_features(input_ids, segment_ids, input_mask)
-
-        # Find the best path, given the features.
-        score, label_seq_ids = self._viterbi_decode(bert_feats)
-        return score, label_seq_ids
+    def log_sum_exp_batch(log_Tensor, axis=-1): # shape (batch_size,n,m)
+        return torch.max(log_Tensor, axis)[0]+torch.log(torch.exp(log_Tensor-torch.max(log_Tensor, axis)[0].view(log_Tensor.shape[0],-1,1)).sum(axis))
 
 
-start_label_id = conllProcessor.get_start_label_id()
-stop_label_id = conllProcessor.get_stop_label_id()
+    class BERT_CRF_NER(nn.Module):
 
-bert_model = BertModel.from_pretrained(bert_model_scale)
-model = BERT_CRF_NER(bert_model, start_label_id, stop_label_id, len(label_list), max_seq_length, batch_size, device)
+        def __init__(self, bert_model, start_label_id, stop_label_id, num_labels, max_seq_length, batch_size, device):
+            super(BERT_CRF_NER, self).__init__()
+            self.hidden_size = 768
+            self.start_label_id = start_label_id
+            self.stop_label_id = stop_label_id
+            self.num_labels = num_labels
+            # self.max_seq_length = max_seq_length
+            self.batch_size = batch_size
+            self.device=device
 
-#%%
-if load_checkpoint and os.path.exists(output_dir+'/ner_bert_crf_checkpoint.pt'):
+            # use pretrainded BertModel
+            self.bert = bert_model
+            self.dropout = torch.nn.Dropout(0.2)
+            # Maps the output of the bert into label space.
+            self.hidden2label = nn.Linear(self.hidden_size, self.num_labels)
+
+            # Matrix of transition parameters.  Entry i,j is the score of transitioning *to* i *from* j.
+            self.transitions = nn.Parameter(
+                torch.randn(self.num_labels, self.num_labels))
+
+            # These two statements enforce the constraint that we never transfer *to* the start tag(or label),
+            # and we never transfer *from* the stop label (the model would probably learn this anyway,
+            # so this enforcement is likely unimportant)
+            self.transitions.data[start_label_id, :] = -10000
+            self.transitions.data[:, stop_label_id] = -10000
+
+            nn.init.xavier_uniform_(self.hidden2label.weight)
+            nn.init.constant_(self.hidden2label.bias, 0.0)
+            # self.apply(self.init_bert_weights)
+
+        def init_bert_weights(self, module):
+            """ Initialize the weights.
+            """
+            if isinstance(module, (nn.Linear, nn.Embedding)):
+                # Slightly different from the TF version which uses truncated_normal for initialization
+                # cf https://github.com/pytorch/pytorch/pull/5617
+                module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            elif isinstance(module, BertLayerNorm):
+                module.bias.data.zero_()
+                module.weight.data.fill_(1.0)
+            if isinstance(module, nn.Linear) and module.bias is not None:
+                module.bias.data.zero_()
+
+        def _forward_alg(self, feats):
+            '''
+            this also called alpha-recursion or forward recursion, to calculate log_prob of all barX
+            '''
+
+            # T = self.max_seq_length
+            T = feats.shape[1]
+            batch_size = feats.shape[0]
+
+            # alpha_recursion,forward, alpha(zt)=p(zt,bar_x_1:t)
+            log_alpha = torch.Tensor(batch_size, 1, self.num_labels).fill_(-10000.).to(self.device)
+            # normal_alpha_0 : alpha[0]=Ot[0]*self.PIs
+            # self.start_label has all of the score. it is log,0 is p=1
+            log_alpha[:, 0, self.start_label_id] = 0
+
+            # feats: sentances -> word embedding -> lstm -> MLP -> feats
+            # feats is the probability of emission, feat.shape=(1,tag_size)
+            for t in range(1, T):
+                log_alpha = (log_sum_exp_batch(self.transitions + log_alpha, axis=-1) + feats[:, t]).unsqueeze(1)
+
+            # log_prob of all barX
+            log_prob_all_barX = log_sum_exp_batch(log_alpha)
+            return log_prob_all_barX
+
+        def _get_bert_features(self, input_ids, segment_ids, input_mask):
+            '''
+            sentances -> word embedding -> lstm -> MLP -> feats
+            '''
+            bert_seq_out, _ = self.bert(input_ids, token_type_ids=segment_ids, attention_mask=input_mask, output_all_encoded_layers=False)
+            bert_seq_out = self.dropout(bert_seq_out)
+            bert_feats = self.hidden2label(bert_seq_out)
+            return bert_feats
+
+        def _score_sentence(self, feats, label_ids):
+            '''
+            Gives the score of a provided label sequence
+            p(X=w1:t,Zt=tag1:t)=...p(Zt=tag_t|Zt-1=tag_t-1)p(xt|Zt=tag_t)...
+            '''
+
+            # T = self.max_seq_length
+            T = feats.shape[1]
+            batch_size = feats.shape[0]
+
+            batch_transitions = self.transitions.expand(batch_size,self.num_labels,self.num_labels)
+            batch_transitions = batch_transitions.flatten(1)
+
+            score = torch.zeros((feats.shape[0],1)).to(device)
+            # the 0th node is start_label->start_word,the probability of them=1. so t begin with 1.
+            for t in range(1, T):
+                score = score + \
+                    batch_transitions.gather(-1, (label_ids[:, t]*self.num_labels+label_ids[:, t-1]).view(-1,1)) \
+                        + feats[:, t].gather(-1, label_ids[:, t].view(-1,1)).view(-1,1)
+            return score
+
+        def _viterbi_decode(self, feats):
+            '''
+            Max-Product Algorithm or viterbi algorithm, argmax(p(z_0:t|x_0:t))
+            '''
+
+            # T = self.max_seq_length
+            T = feats.shape[1]
+            batch_size = feats.shape[0]
+
+            # batch_transitions=self.transitions.expand(batch_size,self.num_labels,self.num_labels)
+
+            log_delta = torch.Tensor(batch_size, 1, self.num_labels).fill_(-10000.).to(self.device)
+            log_delta[:, 0, self.start_label_id] = 0
+
+            # psi is for the vaule of the last latent that make P(this_latent) maximum.
+            psi = torch.zeros((batch_size, T, self.num_labels), dtype=torch.long).to(self.device)  # psi[0]=0000 useless
+            for t in range(1, T):
+                # delta[t][k]=max_z1:t-1( p(x1,x2,...,xt,z1,z2,...,zt-1,zt=k|theta) )
+                # delta[t] is the max prob of the path from  z_t-1 to z_t[k]
+                log_delta, psi[:, t] = torch.max(self.transitions + log_delta, -1)
+                # psi[t][k]=argmax_z1:t-1( p(x1,x2,...,xt,z1,z2,...,zt-1,zt=k|theta) )
+                # psi[t][k] is the path choosed from z_t-1 to z_t[k],the value is the z_state(is k) index of z_t-1
+                log_delta = (log_delta + feats[:, t]).unsqueeze(1)
+
+            # trace back
+            path = torch.zeros((batch_size, T), dtype=torch.long).to(self.device)
+
+            # max p(z1:t,all_x|theta)
+            max_logLL_allz_allx, path[:, -1] = torch.max(log_delta.squeeze(), -1)
+
+            for t in range(T-2, -1, -1):
+                # choose the state of z_t according the state choosed of z_t+1.
+                path[:, t] = psi[:, t+1].gather(-1,path[:, t+1].view(-1,1)).squeeze()
+
+            return max_logLL_allz_allx, path
+
+        def neg_log_likelihood(self, input_ids, segment_ids, input_mask, label_ids):
+            bert_feats = self._get_bert_features(input_ids, segment_ids, input_mask)
+            forward_score = self._forward_alg(bert_feats)
+            # p(X=w1:t,Zt=tag1:t)=...p(Zt=tag_t|Zt-1=tag_t-1)p(xt|Zt=tag_t)...
+            gold_score = self._score_sentence(bert_feats, label_ids)
+            # - log[ p(X=w1:t,Zt=tag1:t)/p(X=w1:t) ] = - log[ p(Zt=tag1:t|X=w1:t) ]
+            return torch.mean(forward_score - gold_score)
+
+        # this forward is just for predict, not for train
+        # dont confuse this with _forward_alg above.
+        def forward(self, input_ids, segment_ids, input_mask):
+            # Get the emission scores from the BiLSTM
+            bert_feats = self._get_bert_features(input_ids, segment_ids, input_mask)
+
+            # Find the best path, given the features.
+            score, label_seq_ids = self._viterbi_decode(bert_feats)
+            return score, label_seq_ids
+
+
+    start_label_id = conllProcessor.get_start_label_id()
+    stop_label_id = conllProcessor.get_stop_label_id()
+
+    bert_model = BertModel.from_pretrained(bert_model_scale)
+    model = BERT_CRF_NER(bert_model, start_label_id, stop_label_id, len(label_list), max_seq_length, batch_size, device)
+
+    #%%
+    if load_checkpoint and os.path.exists(output_dir+'/ner_bert_crf_checkpoint.pt'):
+        checkpoint = torch.load(output_dir+'/ner_bert_crf_checkpoint.pt', map_location='cpu')
+        start_epoch = checkpoint['epoch']+1
+        valid_acc_prev = checkpoint['valid_acc']
+        valid_f1_prev = checkpoint['valid_f1']
+        pretrained_dict=checkpoint['model_state']
+        net_state_dict = model.state_dict()
+        pretrained_dict_selected = {k: v for k, v in pretrained_dict.items() if k in net_state_dict}
+        net_state_dict.update(pretrained_dict_selected)
+        model.load_state_dict(net_state_dict)
+        print('Loaded the pretrain NER_BERT_CRF model, epoch:',checkpoint['epoch'],'valid acc:',
+                checkpoint['valid_acc'], 'valid f1:', checkpoint['valid_f1'])
+    else:
+        start_epoch = 0
+        valid_acc_prev = 0
+        valid_f1_prev = 0
+
+    model.to(device)
+
+    # Prepare optimizer
+    param_optimizer = list(model.named_parameters())
+
+    no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+    new_param = ['transitions', 'hidden2label.weight', 'hidden2label.bias']
+    optimizer_grouped_parameters = [
+        {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay) \
+            and not any(nd in n for nd in new_param)], 'weight_decay': weight_decay_finetune},
+        {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay) \
+            and not any(nd in n for nd in new_param)], 'weight_decay': 0.0},
+        {'params': [p for n, p in param_optimizer if n in ('transitions','hidden2label.weight')] \
+            , 'lr':lr0_crf_fc, 'weight_decay': weight_decay_crf_fc},
+        {'params': [p for n, p in param_optimizer if n == 'hidden2label.bias'] \
+            , 'lr':lr0_crf_fc, 'weight_decay': 0.0}
+    ]
+    optimizer = BertAdam(optimizer_grouped_parameters, lr=learning_rate0, warmup=warmup_proportion, t_total=total_train_steps)
+    # optimizer = optim.Adam(model.parameters(), lr=learning_rate0)
+
+    def warmup_linear(x, warmup=0.002):
+        if x < warmup:
+            return x/warmup
+        return 1.0 - x
+
+    def evaluate(model, predict_dataloader, batch_size, epoch_th, dataset_name):
+        # print("***** Running prediction *****")
+        model.eval()
+        all_preds = []
+        all_labels = []
+        total=0
+        correct=0
+        start = time.time()
+        with torch.no_grad():
+            for batch in predict_dataloader:
+                batch = tuple(t.to(device) for t in batch)
+                input_ids, input_mask, segment_ids, predict_mask, label_ids = batch
+                _, predicted_label_seq_ids = model(input_ids, segment_ids, input_mask)
+                # _, predicted = torch.max(out_scores, -1)
+                valid_predicted = torch.masked_select(predicted_label_seq_ids, predict_mask)
+                valid_label_ids = torch.masked_select(label_ids, predict_mask)
+                all_preds.extend(valid_predicted.tolist())
+                all_labels.extend(valid_label_ids.tolist())
+                # print(len(valid_label_ids),len(valid_predicted),len(valid_label_ids)==len(valid_predicted))
+                total += len(valid_label_ids)
+                correct += valid_predicted.eq(valid_label_ids).sum().item()
+
+        test_acc = correct/total
+        precision, recall, f1 = f1_score(np.array(all_labels), np.array(all_preds))
+        end = time.time()
+        print('Epoch:%d, Acc:%.2f, Precision: %.2f, Recall: %.2f, F1: %.2f on %s, Spend:%.3f minutes for evaluation' \
+            % (epoch_th, 100.*test_acc, 100.*precision, 100.*recall, 100.*f1, dataset_name,(end-start)/60.0))
+        print('--------------------------------------------------------------')
+        return test_acc, f1
+
+    #%%
+    # train procedure
+    global_step_th = int(len(train_examples) / batch_size / gradient_accumulation_steps * start_epoch)
+
+    # train_start=time.time()
+    # for epoch in trange(start_epoch, total_train_epochs, desc="Epoch"):
+    for epoch in range(start_epoch, total_train_epochs):
+        tr_loss = 0
+        train_start = time.time()
+        model.train()
+        optimizer.zero_grad()
+        # for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
+        for step, batch in enumerate(train_dataloader):
+            batch = tuple(t.to(device) for t in batch)
+            input_ids, input_mask, segment_ids, predict_mask, label_ids = batch
+
+            neg_log_likelihood = model.neg_log_likelihood(input_ids, segment_ids, input_mask, label_ids)
+
+            if gradient_accumulation_steps > 1:
+                neg_log_likelihood = neg_log_likelihood / gradient_accumulation_steps
+
+            neg_log_likelihood.backward()
+
+            tr_loss += neg_log_likelihood.item()
+
+            if (step + 1) % gradient_accumulation_steps == 0:
+                # modify learning rate with special warm up BERT uses
+                lr_this_step = learning_rate0 * warmup_linear(global_step_th/total_train_steps, warmup_proportion)
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = lr_this_step
+                optimizer.step()
+                optimizer.zero_grad()
+                global_step_th += 1
+
+            print("Epoch:{}-{}/{}, Negative loglikelihood: {} ".format(epoch, step, len(train_dataloader), neg_log_likelihood.item()))
+
+        print('--------------------------------------------------------------')
+        print("Epoch:{} completed, Total training's Loss: {}, Spend: {}m".format(epoch, tr_loss, (time.time() - train_start)/60.0))
+        valid_acc, valid_f1 = evaluate(model, dev_dataloader, batch_size, epoch, 'Valid_set')
+
+        # Save a checkpoint
+        if valid_f1 > valid_f1_prev:
+            # model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
+            torch.save({'epoch': epoch, 'model_state': model.state_dict(), 'valid_acc': valid_acc,
+                'valid_f1': valid_f1, 'max_seq_length': max_seq_length, 'lower_case': do_lower_case},
+                        os.path.join(output_dir, 'ner_bert_crf_checkpoint.pt'))
+            valid_f1_prev = valid_f1
+
+    evaluate(model, test_dataloader, batch_size, total_train_epochs-1, 'Test_set')
+
+
+    #%%
+    '''
+    Test_set prediction using the best epoch of NER_BERT_CRF model
+    '''
     checkpoint = torch.load(output_dir+'/ner_bert_crf_checkpoint.pt', map_location='cpu')
-    start_epoch = checkpoint['epoch']+1
+    epoch = checkpoint['epoch']
     valid_acc_prev = checkpoint['valid_acc']
     valid_f1_prev = checkpoint['valid_f1']
     pretrained_dict=checkpoint['model_state']
@@ -734,164 +864,38 @@ if load_checkpoint and os.path.exists(output_dir+'/ner_bert_crf_checkpoint.pt'):
     pretrained_dict_selected = {k: v for k, v in pretrained_dict.items() if k in net_state_dict}
     net_state_dict.update(pretrained_dict_selected)
     model.load_state_dict(net_state_dict)
-    print('Loaded the pretrain NER_BERT_CRF model, epoch:',checkpoint['epoch'],'valid acc:',
-            checkpoint['valid_acc'], 'valid f1:', checkpoint['valid_f1'])
-else:
-    start_epoch = 0
-    valid_acc_prev = 0
-    valid_f1_prev = 0
+    print('Loaded the pretrain  NER_BERT_CRF  model, epoch:',checkpoint['epoch'],'valid acc:',
+        checkpoint['valid_acc'], 'valid f1:', checkpoint['valid_f1'])
 
-model.to(device)
+    model.to(device)
+    #evaluate(model, train_dataloader, batch_size, total_train_epochs-1, 'Train_set')
+    evaluate(model, test_dataloader, batch_size, epoch, 'Test_set')
+    # print('Total spend:',(time.time()-train_start)/60.0)
 
-# Prepare optimizer
-param_optimizer = list(model.named_parameters())
 
-no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-new_param = ['transitions', 'hidden2label.weight', 'hidden2label.bias']
-optimizer_grouped_parameters = [
-    {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay) \
-        and not any(nd in n for nd in new_param)], 'weight_decay': weight_decay_finetune},
-    {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay) \
-        and not any(nd in n for nd in new_param)], 'weight_decay': 0.0},
-    {'params': [p for n, p in param_optimizer if n in ('transitions','hidden2label.weight')] \
-        , 'lr':lr0_crf_fc, 'weight_decay': weight_decay_crf_fc},
-    {'params': [p for n, p in param_optimizer if n == 'hidden2label.bias'] \
-        , 'lr':lr0_crf_fc, 'weight_decay': 0.0}
-]
-optimizer = BertAdam(optimizer_grouped_parameters, lr=learning_rate0, warmup=warmup_proportion, t_total=total_train_steps)
-# optimizer = optim.Adam(model.parameters(), lr=learning_rate0)
-
-def warmup_linear(x, warmup=0.002):
-    if x < warmup:
-        return x/warmup
-    return 1.0 - x
-
-def evaluate(model, predict_dataloader, batch_size, epoch_th, dataset_name):
-    # print("***** Running prediction *****")
+    #%%
     model.eval()
-    all_preds = []
-    all_labels = []
-    total=0
-    correct=0
-    start = time.time()
     with torch.no_grad():
-        for batch in predict_dataloader:
+        demon_dataloader = data.DataLoader(dataset=test_dataset,
+                                    batch_size=10,
+                                    shuffle=False,
+                                    num_workers=4,
+                                    collate_fn=pad)
+        for batch in demon_dataloader:
             batch = tuple(t.to(device) for t in batch)
             input_ids, input_mask, segment_ids, predict_mask, label_ids = batch
             _, predicted_label_seq_ids = model(input_ids, segment_ids, input_mask)
             # _, predicted = torch.max(out_scores, -1)
             valid_predicted = torch.masked_select(predicted_label_seq_ids, predict_mask)
-            valid_label_ids = torch.masked_select(label_ids, predict_mask)
-            all_preds.extend(valid_predicted.tolist())
-            all_labels.extend(valid_label_ids.tolist())
-            # print(len(valid_label_ids),len(valid_predicted),len(valid_label_ids)==len(valid_predicted))
-            total += len(valid_label_ids)
-            correct += valid_predicted.eq(valid_label_ids).sum().item()
-
-    test_acc = correct/total
-    precision, recall, f1 = f1_score(np.array(all_labels), np.array(all_preds))
-    end = time.time()
-    print('Epoch:%d, Acc:%.2f, Precision: %.2f, Recall: %.2f, F1: %.2f on %s, Spend:%.3f minutes for evaluation' \
-        % (epoch_th, 100.*test_acc, 100.*precision, 100.*recall, 100.*f1, dataset_name,(end-start)/60.0))
-    print('--------------------------------------------------------------')
-    return test_acc, f1
-
-#%%
-# train procedure
-global_step_th = int(len(train_examples) / batch_size / gradient_accumulation_steps * start_epoch)
-
-# train_start=time.time()
-# for epoch in trange(start_epoch, total_train_epochs, desc="Epoch"):
-for epoch in range(start_epoch, total_train_epochs):
-    tr_loss = 0
-    train_start = time.time()
-    model.train()
-    optimizer.zero_grad()
-    # for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
-    for step, batch in enumerate(train_dataloader):
-        batch = tuple(t.to(device) for t in batch)
-        input_ids, input_mask, segment_ids, predict_mask, label_ids = batch
-
-        neg_log_likelihood = model.neg_log_likelihood(input_ids, segment_ids, input_mask, label_ids)
-
-        if gradient_accumulation_steps > 1:
-            neg_log_likelihood = neg_log_likelihood / gradient_accumulation_steps
-
-        neg_log_likelihood.backward()
-
-        tr_loss += neg_log_likelihood.item()
-
-        if (step + 1) % gradient_accumulation_steps == 0:
-            # modify learning rate with special warm up BERT uses
-            lr_this_step = learning_rate0 * warmup_linear(global_step_th/total_train_steps, warmup_proportion)
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr_this_step
-            optimizer.step()
-            optimizer.zero_grad()
-            global_step_th += 1
-
-        print("Epoch:{}-{}/{}, Negative loglikelihood: {} ".format(epoch, step, len(train_dataloader), neg_log_likelihood.item()))
-
-    print('--------------------------------------------------------------')
-    print("Epoch:{} completed, Total training's Loss: {}, Spend: {}m".format(epoch, tr_loss, (time.time() - train_start)/60.0))
-    valid_acc, valid_f1 = evaluate(model, dev_dataloader, batch_size, epoch, 'Valid_set')
-
-    # Save a checkpoint
-    if valid_f1 > valid_f1_prev:
-        # model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
-        torch.save({'epoch': epoch, 'model_state': model.state_dict(), 'valid_acc': valid_acc,
-            'valid_f1': valid_f1, 'max_seq_length': max_seq_length, 'lower_case': do_lower_case},
-                    os.path.join(output_dir, 'ner_bert_crf_checkpoint.pt'))
-        valid_f1_prev = valid_f1
-
-evaluate(model, test_dataloader, batch_size, total_train_epochs-1, 'Test_set')
-
-
-#%%
-'''
-Test_set prediction using the best epoch of NER_BERT_CRF model
-'''
-checkpoint = torch.load(output_dir+'/ner_bert_crf_checkpoint.pt', map_location='cpu')
-epoch = checkpoint['epoch']
-valid_acc_prev = checkpoint['valid_acc']
-valid_f1_prev = checkpoint['valid_f1']
-pretrained_dict=checkpoint['model_state']
-net_state_dict = model.state_dict()
-pretrained_dict_selected = {k: v for k, v in pretrained_dict.items() if k in net_state_dict}
-net_state_dict.update(pretrained_dict_selected)
-model.load_state_dict(net_state_dict)
-print('Loaded the pretrain  NER_BERT_CRF  model, epoch:',checkpoint['epoch'],'valid acc:',
-      checkpoint['valid_acc'], 'valid f1:', checkpoint['valid_f1'])
-
-model.to(device)
-#evaluate(model, train_dataloader, batch_size, total_train_epochs-1, 'Train_set')
-evaluate(model, test_dataloader, batch_size, epoch, 'Test_set')
-# print('Total spend:',(time.time()-train_start)/60.0)
-
-
-#%%
-model.eval()
-with torch.no_grad():
-    demon_dataloader = data.DataLoader(dataset=test_dataset,
-                                batch_size=10,
-                                shuffle=False,
-                                num_workers=4,
-                                collate_fn=pad)
-    for batch in demon_dataloader:
-        batch = tuple(t.to(device) for t in batch)
-        input_ids, input_mask, segment_ids, predict_mask, label_ids = batch
-        _, predicted_label_seq_ids = model(input_ids, segment_ids, input_mask)
-        # _, predicted = torch.max(out_scores, -1)
-        valid_predicted = torch.masked_select(predicted_label_seq_ids, predict_mask)
-        # valid_label_ids = torch.masked_select(label_ids, predict_mask)
-        for i in range(10):
-            print(predicted_label_seq_ids[i])
-            print(label_ids[i])
-            new_ids=predicted_label_seq_ids[i].cpu().numpy()[predict_mask[i].cpu().numpy()==1]
-            print(list(map(lambda i: label_list[i], new_ids)))
-            print(test_examples[i].labels)
-        break
-#%%
-print(conllProcessor.get_label_map())
-# print(test_examples[8].words)
-# print(test_features[8].label_ids)
+            # valid_label_ids = torch.masked_select(label_ids, predict_mask)
+            for i in range(10):
+                print(predicted_label_seq_ids[i])
+                print(label_ids[i])
+                new_ids=predicted_label_seq_ids[i].cpu().numpy()[predict_mask[i].cpu().numpy()==1]
+                print(list(map(lambda i: label_list[i], new_ids)))
+                print(test_examples[i].labels)
+            break
+    #%%
+    print(conllProcessor.get_label_map())
+    # print(test_examples[8].words)
+    # print(test_features[8].label_ids)

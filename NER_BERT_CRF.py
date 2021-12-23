@@ -83,7 +83,7 @@ do_predict = True
 load_checkpoint = True
 # "The vocabulary file that the BERT model was trained on."
 max_seq_length = 180 #256
-batch_size = 2 #32
+batch_size = 8
 # "The initial learning rate for Adam."
 learning_rate0 = 5e-5
 lr0_crf_fc = 8e-5
@@ -484,7 +484,6 @@ global_step_th = int(len(train_examples) / batch_size / gradient_accumulation_st
 # for epoch in trange(start_epoch, total_train_epochs, desc="Epoch"):
 
 if __name__ == "__main__":
-
     for epoch in range(start_epoch, total_train_epochs):
         tr_loss = 0
         train_start = time.time()
@@ -524,6 +523,7 @@ if __name__ == "__main__":
                 'valid_f1': valid_f1, 'max_seq_length': max_seq_length, 'lower_case': do_lower_case},
                         os.path.join(output_dir, 'ner_bert_checkpoint.pt'))
             valid_f1_prev = valid_f1
+        torch.cuda.empty_cache()
 
     evaluate(model, test_dataloader, batch_size, total_train_epochs-1, 'Test_set')
 
@@ -880,7 +880,7 @@ if __name__ == "__main__":
                                     batch_size=10,
                                     shuffle=False,
                                     num_workers=4,
-                                    collate_fn=pad)
+                                    collate_fn=NerDataset.pad)
         for batch in demon_dataloader:
             batch = tuple(t.to(device) for t in batch)
             input_ids, input_mask, segment_ids, predict_mask, label_ids = batch

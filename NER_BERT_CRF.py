@@ -37,6 +37,7 @@ from tqdm import tqdm, trange
 import collections
 
 from pytorch_pretrained_bert.modeling import BertModel, BertForTokenClassification, BertLayerNorm
+from transformers import AutoModel, AutoModelForTokenClassification, AutoTokenizer
 import pickle
 from pytorch_pretrained_bert.optimization import BertAdam, warmup_linear
 from pytorch_pretrained_bert.tokenization import BertTokenizer
@@ -72,7 +73,8 @@ print('Cuda is available?', cuda_yes)
 device = torch.device("cuda:0" if cuda_yes else "cpu")
 print('Device:', device)
 
-data_dir = os.path.join(get_data_dir(), 'NER_data/CoNLL2003/')
+# data_dir = os.path.join(get_data_dir(), 'NER_data/CoNLL2003/')
+data_dir = os.path.join(get_data_dir(), 'NER_data/Stockmark/')
 # "Whether to run training."
 do_train = True
 # "Whether to run eval on the dev set."
@@ -82,7 +84,7 @@ do_predict = True
 # Whether load checkpoint file before train model
 load_checkpoint = True
 # "The vocabulary file that the BERT model was trained on."
-max_seq_length = 180 #256
+max_seq_length = 256 #256
 batch_size = 8
 # "The initial learning rate for Adam."
 learning_rate0 = 5e-5
@@ -93,7 +95,8 @@ total_train_epochs = 1
 gradient_accumulation_steps = 1
 warmup_proportion = 0.1
 output_dir = './output/'
-bert_model_scale = 'bert-base-cased'
+# bert_model_scale = 'bert-base-cased'
+bert_model_scale = 'cl-tohoku/bert-base-japanese'
 do_lower_case = False
 # eval_batch_size = 8
 # predict_batch_size = 8
@@ -191,6 +194,62 @@ class DataProcessor(object):
                 # out_lines.append([sentence, ner_seq])
                 out_lists.append([words,pos_tags,bio_pos_tags,ner_labels])
         return out_lists
+
+
+import math
+class StockmarkDataProcessor(DataProcessor):
+    def __init__(self, data_dir) -> None:
+        super().__init__()
+        self.ENTITY_TYPES = [
+            '人名', '法人名', '政治的組織名', 'その他の組織名', '地名', '施設名', '製品名', 'イベント名'
+        ]
+        self._label_types = [self.tagname(i) for i in range(len(self.ENTITY_TYPES) * 2)] + ['O', 'X', '[CLS]', '[SEP]',]
+
+        self._label_map = {label: i for i, label in enumerate(self._label_types)}
+
+        data = self._create_examples(
+            self._read_data(os.path.join(data_dir, "train.txt")))
+        self.train_data = data[0:math.floor(len(data) * 0.7)]
+        self.val_data = data[0:math.floor(len(data) * 0.2)]
+        self.test_data = data[0:math.floor(len(data) * 0.1)]
+
+    def tagname(self, entity_num: int):
+        index = math.floor(entity_num/2)
+        if entity_num % 2 == 0:
+            return f'B-{self.ENTITY_TYPES[index]}'
+        else:
+            return f'I-{self.ENTITY_TYPES[index]}'
+
+    def get_labels(self):
+        return self._label_types
+
+    def get_label_map(self):
+        return self._label_map
+
+    def get_start_label_id(self):
+        return self._label_map['[CLS]']
+
+    def get_stop_label_id(self):
+        return self._label_map['[SEP]']
+
+    def get_train_examples(self):
+        return self.train_data
+
+    def get_dev_examples(self):
+        return self.val_data
+
+    def get_test_examples(self):
+        return self.test_data
+
+    def _create_examples(self, all_lists):
+        examples = []
+        for (i, one_lists) in enumerate(all_lists):
+            guid = i
+            words = one_lists[0]
+            labels = one_lists[-1]
+            examples.append(InputExample(
+                guid=guid, words=words, labels=labels))
+        return examples
 
 
 class CoNLLDataProcessor(DataProcessor):
@@ -372,12 +431,19 @@ if cuda_yes:
     torch.cuda.manual_seed_all(44)
 
 # Load pre-trained model tokenizer (vocabulary)
-conllProcessor = CoNLLDataProcessor()
-label_list = conllProcessor.get_labels()
-label_map = conllProcessor.get_label_map()
-train_examples = conllProcessor.get_train_examples(data_dir)
-dev_examples = conllProcessor.get_dev_examples(data_dir)
-test_examples = conllProcessor.get_test_examples(data_dir)
+# conllProcessor = CoNLLDataProcessor()
+# label_list = conllProcessor.get_labels()
+# label_map = conllProcessor.get_label_map()
+# train_examples = conllProcessor.get_train_examples(data_dir)
+# dev_examples = conllProcessor.get_dev_examples(data_dir)
+# test_examples = conllProcessor.get_test_examples(data_dir)
+
+stockmarkProcessor = StockmarkDataProcessor(data_dir)
+label_list = stockmarkProcessor.get_labels()
+label_map = stockmarkProcessor.get_label_map()
+train_examples = stockmarkProcessor.get_train_examples()
+dev_examples = stockmarkProcessor.get_dev_examples()
+test_examples = stockmarkProcessor.get_test_examples()
 
 total_train_steps = int(len(train_examples) / batch_size / gradient_accumulation_steps * total_train_epochs)
 
@@ -386,7 +452,9 @@ print("  Num examples = %d"% len(train_examples))
 print("  Batch size = %d"% batch_size)
 print("  Num steps = %d"% total_train_steps)
 
-tokenizer = BertTokenizer.from_pretrained(bert_model_scale, do_lower_case=do_lower_case)
+# tokenizer = BertTokenizer.from_pretrained(bert_model_scale, do_lower_case=do_lower_case)
+# tokenizer = BertTokenizer.from_pretrained(bert_model_scale)
+tokenizer = AutoTokenizer.from_pretrained(bert_model_scale)
 
 train_dataset = NerDataset(train_examples,tokenizer,label_map,max_seq_length)
 dev_dataset = NerDataset(dev_examples,tokenizer,label_map,max_seq_length)
@@ -422,7 +490,7 @@ if load_checkpoint and os.path.exists(output_dir+'/ner_bert_checkpoint.pt'):
     start_epoch = checkpoint['epoch']+1
     valid_acc_prev = checkpoint['valid_acc']
     valid_f1_prev = checkpoint['valid_f1']
-    model = BertForTokenClassification.from_pretrained(
+    model = AutoModelForTokenClassification.from_pretrained(
         bert_model_scale, state_dict=checkpoint['model_state'], num_labels=len(label_list))
     print('Loaded the pretrain NER_BERT model, epoch:',checkpoint['epoch'],'valid acc:',
             checkpoint['valid_acc'], 'valid f1:', checkpoint['valid_f1'])
@@ -430,7 +498,7 @@ else:
     start_epoch = 0
     valid_acc_prev = 0
     valid_f1_prev = 0
-    model = BertForTokenClassification.from_pretrained(
+    model = AutoModelForTokenClassification.from_pretrained(
         bert_model_scale, num_labels=len(label_list))
 
 model.to(device)
@@ -494,7 +562,8 @@ if __name__ == "__main__":
             batch = tuple(t.to(device) for t in batch)
 
             input_ids, input_mask, segment_ids, predict_mask, label_ids = batch
-            loss = model(input_ids, segment_ids, input_mask, label_ids)
+            # loss = model(input_ids, segment_ids, input_mask, label_ids)
+            loss = model(input_ids, segment_ids, input_mask, labels=label_ids).loss
 
             if gradient_accumulation_steps > 1:
                 loss = loss / gradient_accumulation_steps
@@ -524,6 +593,8 @@ if __name__ == "__main__":
                         os.path.join(output_dir, 'ner_bert_checkpoint.pt'))
             valid_f1_prev = valid_f1
         torch.cuda.empty_cache()
+    print('processed line 593')
+    exit(0)
 
     evaluate(model, test_dataloader, batch_size, total_train_epochs-1, 'Test_set')
 

@@ -527,7 +527,8 @@ def evaluate(model, predict_dataloader, batch_size, epoch_th, dataset_name):
             input_ids, input_mask, segment_ids, predict_mask, label_ids = batch
             out_scores = model(input_ids, segment_ids, input_mask)
             # out_scores = out_scores.detach().cpu().numpy()
-            _, predicted = torch.max(out_scores, -1)
+
+            _, predicted = torch.max(out_scores.logits, -1)
             valid_predicted = torch.masked_select(predicted, predict_mask)
             valid_label_ids = torch.masked_select(label_ids, predict_mask)
             # print(len(valid_label_ids),len(valid_predicted),len(valid_label_ids)==len(valid_predicted))
@@ -593,8 +594,6 @@ if __name__ == "__main__":
                         os.path.join(output_dir, 'ner_bert_checkpoint.pt'))
             valid_f1_prev = valid_f1
         torch.cuda.empty_cache()
-    print('processed line 593')
-    exit(0)
 
     evaluate(model, test_dataloader, batch_size, total_train_epochs-1, 'Test_set')
 
@@ -606,7 +605,7 @@ if __name__ == "__main__":
     epoch = checkpoint['epoch']
     valid_acc_prev = checkpoint['valid_acc']
     valid_f1_prev = checkpoint['valid_f1']
-    model = BertForTokenClassification.from_pretrained(
+    model = AutoModelForTokenClassification.from_pretrained(
         bert_model_scale, state_dict=checkpoint['model_state'], num_labels=len(label_list))
     # if os.path.exists(output_dir+'/ner_bert_crf_checkpoint.pt'):
     model.to(device)
@@ -616,7 +615,6 @@ if __name__ == "__main__":
     model.to(device)
     # evaluate(model, train_dataloader, batch_size, total_train_epochs-1, 'Train_set')
     evaluate(model, test_dataloader, batch_size, epoch, 'Test_set')
-
 
     #%%
     '''
@@ -711,10 +709,10 @@ if __name__ == "__main__":
             '''
             sentances -> word embedding -> lstm -> MLP -> feats
             '''
-            bert_seq_out, _ = self.bert(input_ids, token_type_ids=segment_ids, attention_mask=input_mask, output_all_encoded_layers=False)
-            bert_seq_out = self.dropout(bert_seq_out)
-            bert_feats = self.hidden2label(bert_seq_out)
-            return bert_feats
+            bert_seq_out = self.bert(input_ids, token_type_ids=segment_ids, attention_mask=input_mask)
+            out_feat = self.dropout(bert_seq_out.last_hidden_state)
+            out_feat = self.hidden2label(out_feat)
+            return out_feat
 
         def _score_sentence(self, feats, label_ids):
             '''
@@ -789,15 +787,19 @@ if __name__ == "__main__":
 
             # Find the best path, given the features.
             score, label_seq_ids = self._viterbi_decode(bert_feats)
+            print("score:",score, "label_seq_ids:",label_seq_ids)
             return score, label_seq_ids
 
 
-    start_label_id = conllProcessor.get_start_label_id()
-    stop_label_id = conllProcessor.get_stop_label_id()
+    # start_label_id = conllProcessor.get_start_label_id()
+    # stop_label_id = conllProcessor.get_stop_label_id()
+    start_label_id = stockmarkProcessor.get_start_label_id()
+    stop_label_id = stockmarkProcessor.get_stop_label_id()
 
-    bert_model = BertModel.from_pretrained(bert_model_scale)
+    bert_model = AutoModel.from_pretrained(bert_model_scale)
     model = BERT_CRF_NER(bert_model, start_label_id, stop_label_id, len(label_list), max_seq_length, batch_size, device)
 
+    print('line processed 801')
     #%%
     if load_checkpoint and os.path.exists(output_dir+'/ner_bert_crf_checkpoint.pt'):
         checkpoint = torch.load(output_dir+'/ner_bert_crf_checkpoint.pt', map_location='cpu')
@@ -836,6 +838,8 @@ if __name__ == "__main__":
     optimizer = BertAdam(optimizer_grouped_parameters, lr=learning_rate0, warmup=warmup_proportion, t_total=total_train_steps)
     # optimizer = optim.Adam(model.parameters(), lr=learning_rate0)
 
+    print('line processed 840')
+
     def warmup_linear(x, warmup=0.002):
         if x < warmup:
             return x/warmup
@@ -870,6 +874,7 @@ if __name__ == "__main__":
             % (epoch_th, 100.*test_acc, 100.*precision, 100.*recall, 100.*f1, dataset_name,(end-start)/60.0))
         print('--------------------------------------------------------------')
         return test_acc, f1
+
 
     #%%
     # train procedure
@@ -921,6 +926,7 @@ if __name__ == "__main__":
 
     evaluate(model, test_dataloader, batch_size, total_train_epochs-1, 'Test_set')
 
+    print('processed line 928')
 
     #%%
     '''
@@ -943,6 +949,7 @@ if __name__ == "__main__":
     evaluate(model, test_dataloader, batch_size, epoch, 'Test_set')
     # print('Total spend:',(time.time()-train_start)/60.0)
 
+    print('processed line 951')
 
     #%%
     model.eval()
@@ -957,16 +964,23 @@ if __name__ == "__main__":
             input_ids, input_mask, segment_ids, predict_mask, label_ids = batch
             _, predicted_label_seq_ids = model(input_ids, segment_ids, input_mask)
             # _, predicted = torch.max(out_scores, -1)
+            print('model output:', predicted_label_seq_ids, predict_mask)
             valid_predicted = torch.masked_select(predicted_label_seq_ids, predict_mask)
             # valid_label_ids = torch.masked_select(label_ids, predict_mask)
-            for i in range(10):
-                print(predicted_label_seq_ids[i])
-                print(label_ids[i])
-                new_ids=predicted_label_seq_ids[i].cpu().numpy()[predict_mask[i].cpu().numpy()==1]
+
+            print(1, predicted_label_seq_ids)
+            print(2, label_ids)
+            print(3, predict_mask)
+            print(4, label_list)
+            print(5, test_examples)
+            for i in range(5):
+                print(predicted_label_seq_ids[0][i])
+                print(label_ids[0][i])
+                new_ids = predicted_label_seq_ids[0][i].cpu().numpy()[predict_mask[0][i].cpu().numpy()==1]
                 print(list(map(lambda i: label_list[i], new_ids)))
-                print(test_examples[i].labels)
+                print(test_examples[0].labels)
             break
     #%%
-    print(conllProcessor.get_label_map())
+    print(stockmarkProcessor.get_label_map())
     # print(test_examples[8].words)
     # print(test_features[8].label_ids)

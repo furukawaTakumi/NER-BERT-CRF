@@ -203,7 +203,7 @@ class StockmarkDataProcessor(DataProcessor):
         self.ENTITY_TYPES = [
             '人名', '法人名', '政治的組織名', 'その他の組織名', '地名', '施設名', '製品名', 'イベント名'
         ]
-        self._label_types = [self.tagname(i) for i in range(len(self.ENTITY_TYPES) * 2)] + ['O', 'X', '[CLS]', '[SEP]',]
+        self._label_types = ['O', 'X', '[CLS]', '[SEP]'] + [self.tagname(i) for i in range(len(self.ENTITY_TYPES) * 2)]
 
         self._label_map = {label: i for i, label in enumerate(self._label_types)}
 

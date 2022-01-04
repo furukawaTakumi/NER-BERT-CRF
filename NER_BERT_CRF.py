@@ -212,6 +212,9 @@ class StockmarkDataProcessor(DataProcessor):
         self.train_data = data[0:math.floor(len(data) * 0.7)]
         self.val_data = data[0:math.floor(len(data) * 0.2)]
         self.test_data = data[0:math.floor(len(data) * 0.1)]
+        print('train len: ', len(self.train_data))
+        print('val len: ', len(self.val_data))
+        print('test len: ', len(self.test_data))
 
     def tagname(self, entity_num: int):
         index = math.floor(entity_num/2)
@@ -394,6 +397,8 @@ def f1_score(y_true, y_pred):
     '''
     0,1,2,3 are [CLS],[SEP],[X],O
     '''
+    print('y_true: ', y_true)
+    print('y_pred: ', y_pred)
     ignore_id=3
 
     num_proposed = len(y_pred[y_pred>ignore_id])
@@ -401,16 +406,20 @@ def f1_score(y_true, y_pred):
     num_gold = len(y_true[y_true>ignore_id])
 
     try:
+        print(num_proposed, num_correct, num_gold)
         precision = num_correct / num_proposed
     except ZeroDivisionError:
         precision = 1.0
 
     try:
+        print(num_correct, num_gold)
         recall = num_correct / num_gold
     except ZeroDivisionError:
         recall = 1.0
 
     try:
+        print('aaaaaa', precision, recall)
+        exit(0)
         f1 = 2*precision*recall / (precision + recall)
     except ZeroDivisionError:
         if precision*recall==0:
@@ -587,7 +596,7 @@ if __name__ == "__main__":
         print("Epoch:{} completed, Total training's Loss: {}, Spend: {}m".format(epoch, tr_loss, (time.time() - train_start) / 60.0))
         valid_acc, valid_f1 = evaluate(model, dev_dataloader, batch_size, epoch, 'Valid_set')
         # Save a checkpoint
-        if valid_f1 > valid_f1_prev:
+        if valid_f1 > valid_f1_prev or True:
             # model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
             torch.save({'epoch': epoch, 'model_state': model.state_dict(), 'valid_acc': valid_acc,
                 'valid_f1': valid_f1, 'max_seq_length': max_seq_length, 'lower_case': do_lower_case},
@@ -917,7 +926,7 @@ if __name__ == "__main__":
         valid_acc, valid_f1 = evaluate(model, dev_dataloader, batch_size, epoch, 'Valid_set')
 
         # Save a checkpoint
-        if valid_f1 > valid_f1_prev:
+        if valid_f1 > valid_f1_prev or True:
             # model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
             torch.save({'epoch': epoch, 'model_state': model.state_dict(), 'valid_acc': valid_acc,
                 'valid_f1': valid_f1, 'max_seq_length': max_seq_length, 'lower_case': do_lower_case},
